@@ -1262,7 +1262,7 @@ function MenuCard({ product:p, onOpen, isMobile, categories=[] }) {
 // MENU CARD MOBILE — compact list row, no emoji
 // ─────────────────────────────────────────────
 function MenuCardMobile({ product:p, onOpen, categories=[] }) {
-  const cc = CAT_COLORS[p.category];
+  const cc = CAT_COLORS[p.category] || { bg:"#F3F4F6", text:"#374151" };
   const isPizza = p.category === "pizza";
   const [pressed, setPressed] = useState(false);
   return (
@@ -1796,9 +1796,12 @@ function BoardCard({ order:o, onSetStatus, onDismiss, onEdit }) {
           const detail   = ingList.length > 0 ? item.toppings.map(tid => ingList.find(t => t.id === tid)?.label||"").filter(Boolean).join(", ") : (item.product.note || "");
           const sizePart = item.size ? item.size.label + " " : "";
           return (
-            <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:4, fontSize:"0.74rem", color:"#3D1F00", padding:"2px 0", lineHeight:1.3 }}>
-              <span style={{ flexShrink:0 }}>{item.product.emoji} {item.qty > 1 ? `${item.qty}x ` : ""}{sizePart}{item.product.name}</span>
-              {detail && <span style={{ marginLeft:"auto", color:"#7A5C40", fontSize:"0.66rem", textAlign:"right", maxWidth:"50%" }}>{detail}</span>}
+            <div key={i} style={{ fontSize:"0.74rem", color:"#3D1F00", padding:"2px 0", lineHeight:1.3 }}>
+              <div style={{ display:"flex", alignItems:"flex-start", gap:4 }}>
+                <span style={{ flexShrink:0 }}>{item.product.emoji} {item.qty > 1 ? `${item.qty}x ` : ""}{sizePart}{item.product.name}</span>
+                {detail && <span style={{ marginLeft:"auto", color:"#7A5C40", fontSize:"0.66rem", textAlign:"right", maxWidth:"50%" }}>{detail}</span>}
+              </div>
+              {item.note && <div style={{ color:"#D97706", fontSize:"0.66rem", fontStyle:"italic", marginTop:1, paddingLeft:4, borderLeft:"2px solid #D97706" }}>📝 {item.note}</div>}
             </div>
           );
         })}
@@ -2750,4 +2753,3 @@ function StripeForm({ clientSecret, publishableKey, onSuccess, onError }) {
     </div>
   );
 }
-
