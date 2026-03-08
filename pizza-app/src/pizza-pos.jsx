@@ -728,7 +728,7 @@ export default function PizzaPOS() {
   }
 
   return (
-    <div style={{ minHeight:"100vh", maxHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"'DM Sans',sans-serif", background:"#FFF8F0", overflow:"hidden" }}>
+    <div style={{ height:"100vh", display:"flex", flexDirection:"column", fontFamily:"'DM Sans',sans-serif", background:"#FFF8F0", overflow:"hidden" }}>
 
       {/* ── HEADER ── */}
       <header style={{ background:"#E8251A", height: bp.isMobile ? 50 : 56, padding:`0 ${bp.isMobile ? 14 : 20}px`, display:"flex", alignItems:"stretch", boxShadow:"0 4px 12px rgba(232,37,26,0.3)", flexShrink:0, zIndex:10 }}>
@@ -2750,3 +2750,4 @@ function StripeForm({ clientSecret, publishableKey, onSuccess, onError }) {
     </div>
   );
 }
+
