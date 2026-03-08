@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase } from "./lib/supabase";
 import { getProducts, addProduct, deleteProduct, subscribeToProducts } from "./services/productService";
 import { getOrders, placeOrder, updateOrderItems, updateOrderStatus, dismissOrder, subscribeToOrders } from "./services/orderService";
 import { lookupCustomer, upsertCustomer, formatPhone } from "./services/customerService";
@@ -2131,9 +2132,9 @@ function LoginScreen({ onLogin }) {
       if (data) {
         const staffRow = data.find(r => r.id === "pos_staff");
         const pinRow   = data.find(r => r.id === "pos_pin");
-        if (staffRow) try { setStaffList(JSON.parse(staffRow.value)); } catch(e) { setStaffList(["Ani"]); }
+        if (staffRow) try { setStaffList(JSON.parse(staffRow.text_value)); } catch(e) { setStaffList(["Ani"]); }
         else setStaffList(["Ani"]);
-        if (pinRow) setOwnerPin(String(pinRow.value));
+        if (pinRow) setOwnerPin(String(pinRow.text_value));
       } else { setStaffList(["Ani"]); }
       setLoading(false);
     };
@@ -2451,9 +2452,9 @@ function StaffManager() {
       if (data) {
         const staffRow = data.find(r => r.id === "pos_staff");
         const pinRow   = data.find(r => r.id === "pos_pin");
-        if (staffRow) try { setStaff(JSON.parse(staffRow.value)); } catch(e) { setStaff(["Ani"]); }
+        if (staffRow) try { setStaff(JSON.parse(staffRow.text_value)); } catch(e) { setStaff(["Ani"]); }
         else setStaff(["Ani"]);
-        if (pinRow) setPin(String(pinRow.value));
+        if (pinRow) setPin(String(pinRow.text_value));
       } else { setStaff(["Ani"]); }
     };
     load();
@@ -2461,7 +2462,7 @@ function StaffManager() {
 
   const save = async (list) => {
     setStaff(list);
-    await supabase.from("pricing_config").upsert({ id:"pos_staff", value: JSON.stringify(list), updated_at: new Date().toISOString() });
+    await supabase.from("pricing_config").upsert({ id:"pos_staff", text_value: JSON.stringify(list), updated_at: new Date().toISOString() });
   };
 
   const addStaff = () => {
@@ -2478,7 +2479,7 @@ function StaffManager() {
 
   const savePin = async () => {
     if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) { alert("PIN must be 4 digits"); return; }
-    await supabase.from("pricing_config").upsert({ id:"pos_pin", value: newPin, updated_at: new Date().toISOString() });
+    await supabase.from("pricing_config").upsert({ id:"pos_pin", text_value: newPin, updated_at: new Date().toISOString() });
     setPin(newPin); setNewPin(""); setPinSaved(true);
     setTimeout(() => setPinSaved(false), 2000);
   };
