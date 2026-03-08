@@ -1123,7 +1123,7 @@ export default function PizzaPOS() {
       {/* CARD MODAL — Stripe Terminal */}
       {activeOverlay === "card" && (
         <Overlay isMobile={bp.isMobile}>
-          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "28px 24px 40px" : "44px 52px", textAlign:"center", width: bp.isMobile ? "100%" : 560, maxWidth: bp.isMobile ? undefined : "90vw" }}>
+          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "20px 18px 32px" : "32px 40px", textAlign:"center", width: bp.isMobile ? "100%" : 560, maxWidth: bp.isMobile ? undefined : "92vw", maxHeight: bp.isMobile ? "92vh" : "88vh", overflowY:"auto", WebkitOverflowScrolling:"touch" }}>
             {!cardApproved ? (
               <>
                 {cardMode === "terminal" ? (
@@ -2044,7 +2044,7 @@ function MgrField({ label, children, style }) {
 // ─────────────────────────────────────────────
 function Overlay({ children, isMobile }) {
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(26,10,0,0.85)", zIndex:200, display:"flex", alignItems: isMobile ? "flex-end" : "center", justifyContent:"center" }}>
+    <div style={{ position:"fixed", inset:0, background:"rgba(26,10,0,0.85)", zIndex:200, display:"flex", alignItems: isMobile ? "flex-end" : "center", justifyContent:"center", overflowY:"auto", WebkitOverflowScrolling:"touch", padding: isMobile ? 0 : "20px 0" }}>
       {children}
     </div>
   );
