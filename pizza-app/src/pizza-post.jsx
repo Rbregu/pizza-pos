@@ -2128,7 +2128,7 @@ function LoginScreen({ onLogin }) {
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from("pricing_config").select("id,value").in("id",["pos_staff","pos_pin"]);
+      const { data } = await supabase.from("pricing_config").select("id,text_value").in("id",["pos_staff","pos_pin"]);
       if (data) {
         const staffRow = data.find(r => r.id === "pos_staff");
         const pinRow   = data.find(r => r.id === "pos_pin");
@@ -2150,6 +2150,7 @@ function LoginScreen({ onLogin }) {
     setPin(next);
     setPinError(false);
     if (next.length === 4) {
+      console.log("[PIN] entered:", next, "stored:", ownerPin, "match:", next === ownerPin);
       if (next === ownerPin) {
         onLogin({ name: "Owner", role: "owner", loginTime: new Date() });
       } else {
@@ -2448,7 +2449,7 @@ function StaffManager() {
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from("pricing_config").select("id,value").in("id",["pos_staff","pos_pin"]);
+      const { data } = await supabase.from("pricing_config").select("id,text_value").in("id",["pos_staff","pos_pin"]);
       if (data) {
         const staffRow = data.find(r => r.id === "pos_staff");
         const pinRow   = data.find(r => r.id === "pos_pin");
