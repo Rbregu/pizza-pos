@@ -2121,10 +2121,24 @@ function LoginScreen({ onLogin }) {
   const [pin, setPin]           = useState("");
   const [pinError, setPinError] = useState(false);
   const [shake, setShake]       = useState(false);
+  const [staffList, setStaffList] = useState([]);
+  const [ownerPin,  setOwnerPin]  = useState("1234");
+  const [loading,   setLoading]   = useState(true);
 
-  // Load staff + PIN from localStorage (managed by owner in Manager tab)
-  const staffList = JSON.parse(localStorage.getItem("pizzapos_staff") || '["Ani"]');
-  const ownerPin  = localStorage.getItem("pizzapos_pin") || "1234";
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from("pricing_config").select("id,value").in("id",["pos_staff","pos_pin"]);
+      if (data) {
+        const staffRow = data.find(r => r.id === "pos_staff");
+        const pinRow   = data.find(r => r.id === "pos_pin");
+        if (staffRow) try { setStaffList(JSON.parse(staffRow.value)); } catch(e) { setStaffList(["Ani"]); }
+        else setStaffList(["Ani"]);
+        if (pinRow) setOwnerPin(String(pinRow.value));
+      } else { setStaffList(["Ani"]); }
+      setLoading(false);
+    };
+    load();
+  }, []);
 
   const handleStaffLogin = (name) => {
     onLogin({ name, role: "cashier", loginTime: new Date() });
@@ -2425,13 +2439,30 @@ function DashboardPage({ isMobile }) {
 // Owner adds/removes staff names + changes PIN
 // ─────────────────────────────────────────────
 function StaffManager() {
-  const [staff,    setStaff]    = useState(() => JSON.parse(localStorage.getItem("pizzapos_staff") || '["Ani"]'));
-  const [pin,      setPin]      = useState(() => localStorage.getItem("pizzapos_pin") || "1234");
+  const [staff,    setStaff]    = useState([]);
+  const [pin,      setPin]      = useState("1234");
   const [newName,  setNewName]  = useState("");
   const [newPin,   setNewPin]   = useState("");
   const [pinSaved, setPinSaved] = useState(false);
 
-  const save = (list) => { setStaff(list); localStorage.setItem("pizzapos_staff", JSON.stringify(list)); };
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from("pricing_config").select("id,value").in("id",["pos_staff","pos_pin"]);
+      if (data) {
+        const staffRow = data.find(r => r.id === "pos_staff");
+        const pinRow   = data.find(r => r.id === "pos_pin");
+        if (staffRow) try { setStaff(JSON.parse(staffRow.value)); } catch(e) { setStaff(["Ani"]); }
+        else setStaff(["Ani"]);
+        if (pinRow) setPin(String(pinRow.value));
+      } else { setStaff(["Ani"]); }
+    };
+    load();
+  }, []);
+
+  const save = async (list) => {
+    setStaff(list);
+    await supabase.from("pricing_config").upsert({ id:"pos_staff", value: JSON.stringify(list), updated_at: new Date().toISOString() });
+  };
 
   const addStaff = () => {
     if (!newName.trim()) return;
@@ -2445,9 +2476,9 @@ function StaffManager() {
     save(staff.filter(s => s !== name));
   };
 
-  const savePin = () => {
+  const savePin = async () => {
     if (newPin.length !== 4 || !/^\d{4}$/.test(newPin)) { alert("PIN must be 4 digits"); return; }
-    localStorage.setItem("pizzapos_pin", newPin);
+    await supabase.from("pricing_config").upsert({ id:"pos_pin", value: newPin, updated_at: new Date().toISOString() });
     setPin(newPin); setNewPin(""); setPinSaved(true);
     setTimeout(() => setPinSaved(false), 2000);
   };
