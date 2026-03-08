@@ -63,6 +63,7 @@ export async function placeOrder({
       default_toppings:item.defaultToppings || [],
       quantity:        item.qty,
       price:           item.price,
+      note:            item.note || '',
     }))
 
     const { error: itemsError } = await supabase
@@ -220,6 +221,7 @@ function mapOrderItem(item) {
     defaultToppings: item.default_toppings || [],
     qty:             item.quantity,
     price:           parseFloat(item.price),
+    note:            item.note || '',
   }
 }
 
@@ -253,6 +255,7 @@ export async function updateOrderItems(orderId, { fulfillment, customerName, cus
       default_toppings: item.defaultToppings || [],
       quantity:         item.qty,
       price:            item.price,
+      note:             item.note || '',
     }))
     const { error: itemsErr } = await supabase.from('order_items').insert(orderItems)
     if (itemsErr) throw new Error(itemsErr.message)
