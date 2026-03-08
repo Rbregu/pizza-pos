@@ -1,0 +1,1467 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import { getProducts, addProduct, deleteProduct, subscribeToProducts } from "./services/productService";
+import { getOrders, placeOrder, updateOrderStatus, dismissOrder, subscribeToOrders } from "./services/orderService";
+import { lookupCustomer, upsertCustomer, formatPhone } from "./services/customerService";
+
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+const ALL_TOPPINGS = [
+  { id:"marinara",      label:"Marinara Sauce" },
+  { id:"white_sauce",   label:"White Sauce" },
+  { id:"cheese",        label:"Mozzarella Cheese" },
+  { id:"extra_cheese",  label:"Extra Cheese" },
+  { id:"pepperoni",     label:"Pepperoni" },
+  { id:"sausage",       label:"Italian Sausage" },
+  { id:"mushrooms",     label:"Mushrooms" },
+  { id:"onions",        label:"Onions" },
+  { id:"peppers",       label:"Green Peppers" },
+  { id:"olives",        label:"Black Olives" },
+  { id:"ham",           label:"Ham" },
+  { id:"bacon",         label:"Bacon" },
+  { id:"jalapenos",     label:"Jalapeños" },
+  { id:"pineapple",     label:"Pineapple" },
+  { id:"spinach",       label:"Spinach" },
+  { id:"tomatoes",      label:"Fresh Tomatoes" },
+  { id:"chicken",       label:"Grilled Chicken" },
+  { id:"anchovies",     label:"Anchovies" },
+  { id:"roasted_garlic",label:"Roasted Garlic" },
+];
+
+const EXTRA_PRICE = 0.5;
+const CAT_LABEL   = { pizza:"Pizza", salad:"Salad", grinder:"Grinder", side:"Side", soda:"Soda" };
+const CAT_COLORS  = {
+  pizza:   { bg:"#FEE2E2", text:"#991B1B" },
+  salad:   { bg:"#DCFCE7", text:"#14532D" },
+  grinder: { bg:"#FEF3C7", text:"#92400E" },
+  side:    { bg:"#EDE9FE", text:"#4C1D95" },
+  soda:    { bg:"#DBEAFE", text:"#1E3A8A" },
+};
+const CAT_FILTERS = [
+  { key:"all",     label:"All",      icon:"🍽️" },
+  { key:"pizza",   label:"Pizzas",   icon:"🍕" },
+  { key:"salad",   label:"Salads",   icon:"🥗" },
+  { key:"grinder", label:"Grinders", icon:"🥪" },
+  { key:"side",    label:"Sides",    icon:"🍟" },
+  { key:"soda",    label:"Sodas",    icon:"🥤" },
+];
+
+// ─────────────────────────────────────────────
+// RESPONSIVE HOOK
+// ─────────────────────────────────────────────
+function useBreakpoint() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return { isMobile: width < 640, isTablet: width >= 640 && width < 1024, isDesktop: width >= 1024, width };
+}
+
+// ─────────────────────────────────────────────
+// GLOBAL CSS
+// ─────────────────────────────────────────────
+const globalCss = `
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overscroll-behavior:none;}
+body{font-family:'DM Sans',sans-serif;background:#FFF8F0;color:#1A0A00;}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px);}to{opacity:1;transform:translateX(0);}}
+@keyframes slideUp{from{opacity:0;transform:translateY(100%);}to{opacity:1;transform:translateY(0);}}
+@keyframes cardIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+@keyframes popIn{from{transform:scale(0.8);opacity:0;}to{transform:scale(1);opacity:1;}}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.7;}}
+@keyframes cardPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.1);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-thumb{background:#D1C4B0;border-radius:4px;}
+.slide-in{animation:slideIn 0.2s ease;}
+.slide-up{animation:slideUp 0.3s cubic-bezier(0.32,0.72,0,1);}
+.card-in{animation:cardIn 0.2s ease;}
+.pop-in{animation:popIn 0.3s cubic-bezier(0.34,1.56,0.64,1);}
+.pulse-anim{animation:pulse 1s infinite;}
+.card-pulse{animation:cardPulse 1.2s infinite;}
+.spinner{width:32px;height:32px;border:3px solid #E8D5C0;border-top-color:#E8251A;border-radius:50%;animation:spin 0.8s linear infinite;}
+input,select,textarea,button{font-family:'DM Sans',sans-serif;-webkit-appearance:none;}
+`;
+
+const darkInput = {
+  width:"100%", padding:"9px 11px", background:"#2A1200", border:"1px solid #5A3A1A",
+  borderRadius:8, color:"white", fontFamily:"'DM Sans',sans-serif", fontSize:"0.9rem", outline:"none",
+};
+
+// ─────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────
+export default function PizzaPOS() {
+  const bp = useBreakpoint();
+
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = globalCss;
+    document.head.appendChild(style);
+    let meta = document.querySelector("meta[name=viewport]");
+    if (!meta) { meta = document.createElement("meta"); meta.name = "viewport"; document.head.appendChild(meta); }
+    meta.content = "width=device-width, initial-scale=1, maximum-scale=1";
+    return () => document.head.removeChild(style);
+  }, []);
+
+  // ── Core state ──
+  const [tab, setTab]                         = useState("pos");
+  const [products, setProducts]               = useState([]);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [order, setOrder]                     = useState([]);
+  const [fulfillment, setFulfillment]         = useState("pickup");
+  const [customerName, setCustomerName]       = useState("");
+  const [customerPhone, setCustomerPhone]     = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+  const [orderNotes, setOrderNotes]           = useState("");
+  const [placedOrders, setPlacedOrders]       = useState([]);
+  const [ordersLoading, setOrdersLoading]     = useState(true);
+  const [posFilter, setPosFilter]             = useState("all");
+  const [boardFilter, setBoardFilter]         = useState("all");
+
+  // ── Customer lookup state ──
+  const [foundCustomer, setFoundCustomer]     = useState(null);
+  const [lookingUp, setLookingUp]             = useState(false);
+  const phoneTimerRef = useRef(null);
+
+  // ── Modal state ──
+  const [modalProduct, setModalProduct]               = useState(null);
+  const [modalToppings, setModalToppings]             = useState([]);
+  const [modalDefaultToppings, setModalDefaultToppings] = useState([]);
+  const [modalSize, setModalSize]                     = useState({ label:"S", price:9.99 });
+  const [modalQty, setModalQty]                       = useState(1);
+
+  // ── Payment state ──
+  const [clock, setClock]                   = useState("");
+  const [activeOverlay, setActiveOverlay]   = useState(null);
+  const [pendingOrder, setPendingOrder]     = useState(null);
+  const [cardProgress, setCardProgress]     = useState(0);
+  const [cardStatus, setCardStatus]         = useState("");
+  const [cardApproved, setCardApproved]     = useState(false);
+  const [cardApprovalCode, setCardApprovalCode] = useState("");
+  const [isRecording, setIsRecording]       = useState(false);
+  const [showOrderDrawer, setShowOrderDrawer] = useState(false);
+  const [placingOrder, setPlacingOrder]     = useState(false);
+  const [pickupPaymentOrder, setPickupPaymentOrder] = useState(null); // board order awaiting pickup payment
+  const [incomingCall, setIncomingCall]             = useState(null);   // current call being shown
+  const [activeCalls, setActiveCalls]               = useState([]);     // all active calls queue
+  const [ctiConnected, setCtiConnected]             = useState(false);  // WebSocket connection status
+
+  const recognitionRef = useRef(null);
+  const wsRef          = useRef(null); // WebSocket reference
+  const savedTextRef   = useRef("");
+
+  // ── Load products from DB ──
+  useEffect(() => {
+    getProducts().then(data => {
+      setProducts(data);
+      setProductsLoading(false);
+    });
+    // Real-time: if manager adds/removes product on another device
+    const sub = subscribeToProducts(setProducts);
+    return () => sub.unsubscribe();
+  }, []);
+
+  // ── Load orders from DB ──
+  useEffect(() => {
+    getOrders().then(data => {
+      setPlacedOrders(data);
+      setOrdersLoading(false);
+    });
+    // Real-time board updates
+    const sub = subscribeToOrders(
+      // New order placed (from any device)
+      (newOrder) => setPlacedOrders(prev => [newOrder, ...prev]),
+      // Status updated
+      (orderId, status) => setPlacedOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o)),
+      // Order dismissed/deleted
+      (orderId) => setPlacedOrders(prev => prev.filter(o => o.id !== orderId))
+    );
+    return () => sub.unsubscribe();
+  }, []);
+
+  // ── Clock ──
+  useEffect(() => {
+    const tick = () => setClock(new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── CTI: WebSocket connection to Node.js server for incoming calls ──
+  useEffect(() => {
+    const WS_URL = `ws://${window.location.hostname}:3001`;
+    let reconnectTimer = null;
+
+    const connect = () => {
+      try {
+        const ws = new WebSocket(WS_URL);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setCtiConnected(true);
+          console.log("📞 CTI connected — waiting for incoming calls");
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === "incoming_call") {
+              console.log("📞 Incoming call from:", data.phone);
+              const calls = data.activeCalls || [{ phone: data.phone, callerName: data.callerName }];
+              setActiveCalls(calls);
+              setIncomingCall({ phone: data.phone, callerName: data.callerName });
+              setTab("pos"); // auto switch to POS tab
+            }
+
+            if (data.type === "call_ended") {
+              const remaining = data.activeCalls || [];
+              setActiveCalls(remaining);
+              if (remaining.length === 0) {
+                setIncomingCall(null); // no more calls
+              } else {
+                setIncomingCall(remaining[0]); // show next call in queue
+              }
+            }
+          } catch (e) {
+            console.error("CTI message parse error:", e);
+          }
+        };
+
+        ws.onclose = () => {
+          setCtiConnected(false);
+          wsRef.current = null;
+          // Auto reconnect every 5 seconds
+          reconnectTimer = setTimeout(connect, 5000);
+        };
+
+        ws.onerror = () => {
+          ws.close();
+        };
+      } catch (e) {
+        reconnectTimer = setTimeout(connect, 5000);
+      }
+    };
+
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, []);
+
+  // ── CTI: when incomingCall arrives, auto-fill phone + lookup customer ──
+  useEffect(() => {
+    if (!incomingCall) return;
+    // Auto-fill the phone field and trigger customer lookup
+    handlePhoneChange(incomingCall.phone);
+    // Open order drawer on mobile so cashier sees it immediately
+    if (window.innerWidth < 640) setShowOrderDrawer(true);
+  }, [incomingCall]);
+
+  // ── Phone number lookup (debounced 600ms) ──
+  const handlePhoneChange = useCallback((raw) => {
+    const formatted = formatPhone(raw);
+    setCustomerPhone(formatted);
+    setFoundCustomer(null);
+
+    clearTimeout(phoneTimerRef.current);
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length === 10) {
+      setLookingUp(true);
+      phoneTimerRef.current = setTimeout(async () => {
+        const customer = await lookupCustomer(digits);
+        setLookingUp(false);
+        if (customer) {
+          setFoundCustomer(customer);
+          setCustomerName(customer.name);
+          // Always fill address if customer has one — works for any fulfillment switch
+          if (customer.defaultAddress) {
+            setCustomerAddress(customer.defaultAddress);
+          }
+        }
+      }, 600);
+    }
+  }, []);
+
+  // ── Derived ──
+  const activeOrderCount = placedOrders.filter(o => o.status !== "sent").length;
+  const subtotal = order.reduce((s, i) => s + i.price, 0);
+  const tax      = subtotal * 0.08;
+  const total    = subtotal + tax;
+  const itemCount = order.reduce((s, i) => s + i.qty, 0);
+  const filteredMenuProducts = posFilter === "all" ? products : products.filter(p => p.category === posFilter);
+
+  // ── Modal ──
+  const openModal = useCallback((product) => {
+    const isPizza = product.category === "pizza";
+    const isSoda  = product.category === "soda";
+    const defToppings = isPizza ? [...product.defaultToppings] : [];
+    setModalProduct(product);
+    setModalDefaultToppings(defToppings);
+    setModalToppings(defToppings);
+    setModalQty(1);
+    if (isPizza)     setModalSize({ label:"S", price:product.price });
+    else if (isSoda) setModalSize({ label:"S", price:1.50 });
+    else             setModalSize({ label:"", price:product.price });
+  }, []);
+
+  const closeModal = () => setModalProduct(null);
+
+  const toggleModalTopping = (id) =>
+    setModalToppings(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
+
+  const addToOrder = () => {
+    const isPizza = modalProduct.category === "pizza";
+    const isSoda  = modalProduct.category === "soda";
+    let itemPrice;
+    if (isPizza) {
+      const extras = modalToppings.filter(t => !modalDefaultToppings.includes(t)).length;
+      itemPrice = (modalSize.price + extras * EXTRA_PRICE) * modalQty;
+    } else if (isSoda) {
+      itemPrice = modalSize.price * modalQty;
+    } else {
+      itemPrice = modalProduct.price * modalQty;
+    }
+    setOrder(prev => [...prev, {
+      id: Date.now(), product: modalProduct,
+      defaultToppings: [...modalDefaultToppings], toppings: [...modalToppings],
+      size: (isPizza || isSoda) ? modalSize : null,
+      qty: modalQty, price: itemPrice,
+    }]);
+    closeModal(); // drawer stays closed — cashier opens it manually
+  };
+
+  // ── Checkout ──
+  const handleCheckout = async () => {
+    if (fulfillment === "pickup" && !customerName.trim()) {
+      alert("Please enter the client name for pickup."); return;
+    }
+    if (fulfillment === "delivery") {
+      if (!customerPhone.trim()) { alert("Please enter the phone number for delivery."); return; }
+      if (!customerAddress.trim()) { alert("Please enter the delivery address."); return; }
+    }
+
+    if (fulfillment === "delivery") {
+      // Delivery: take payment now over the phone
+      setActiveOverlay("payment");
+      setShowOrderDrawer(false);
+    } else {
+      // Pickup: place order immediately, payment happens when customer picks up
+      setPlacingOrder(true);
+      setShowOrderDrawer(false);
+      const result = await placeOrder({
+        fulfillment, customerName, customerPhone, customerAddress,
+        notes: orderNotes, items: order, subtotal, tax, total,
+        paymentMethod: null, // paid on pickup
+      });
+      setPlacingOrder(false);
+      if (!result.success) { alert("Error placing order: " + result.error); return; }
+      setPendingOrder({
+        num: result.orderNum, fulfillment,
+        name: customerName, phone: customerPhone, address: customerAddress,
+        notes: orderNotes, items: [...order], subtotal, tax, total,
+      });
+      setActiveOverlay("orderPlaced");
+    }
+  };
+
+  // processPayment: used for DELIVERY (payment at order time)
+  // and for PICKUP when "Picked Up" is pressed on the board
+  const processPayment = async (method) => {
+    const isPickupPayment = !!pickupPaymentOrder; // true when triggered from board
+
+    if (isPickupPayment) {
+      // Pickup payment: mark as sent and save payment method in DB
+      await updateOrderStatus(pickupPaymentOrder.id, "sent", method);
+      setPlacedOrders(prev => prev.map(o => o.id === pickupPaymentOrder.id ? { ...o, status:"sent", paymentMethod:method } : o));
+      setPendingOrder({ ...pickupPaymentOrder, paymentMethod: method });
+    } else {
+      // Delivery payment: place the order now
+      setPlacingOrder(true);
+      const result = await placeOrder({
+        fulfillment, customerName, customerPhone, customerAddress,
+        notes: orderNotes, items: order, subtotal, tax, total,
+        paymentMethod: method,
+      });
+      setPlacingOrder(false);
+      if (!result.success) { alert("Error placing order: " + result.error); setActiveOverlay(null); return; }
+      setPendingOrder({
+        num: result.orderNum, fulfillment,
+        name: customerName, phone: customerPhone, address: customerAddress,
+        notes: orderNotes, items: [...order], subtotal, tax, total,
+      });
+    }
+
+    if (method === "cash") {
+      setActiveOverlay("cash");
+    } else {
+      setActiveOverlay("card");
+      setCardProgress(0); setCardStatus(""); setCardApproved(false);
+      const steps = [
+        { pct:20,  delay:400,  text:"Connecting to terminal..." },
+        { pct:45,  delay:1200, text:"Reading card..." },
+        { pct:65,  delay:2200, text:"Contacting bank..." },
+        { pct:85,  delay:3200, text:"Verifying transaction..." },
+        { pct:100, delay:4200, text:"Approved!" },
+      ];
+      steps.forEach(s => setTimeout(() => { setCardProgress(s.pct); setCardStatus(s.text); }, s.delay));
+      setTimeout(() => {
+        const code = "AUTH-" + Math.random().toString(36).substring(2,8).toUpperCase();
+        setCardApprovalCode(code); setCardApproved(true);
+      }, 5000);
+    }
+  };
+
+  const cancelPayment = () => { setActiveOverlay(null); setPickupPaymentOrder(null); };
+
+  const newOrder = () => {
+    setOrder([]); setCustomerName(""); setCustomerPhone(""); setCustomerAddress("");
+    setOrderNotes(""); setFulfillment("pickup"); setFoundCustomer(null);
+    setPendingOrder(null); setActiveOverlay(null); setPickupPaymentOrder(null);
+    setCardApproved(false); setCardProgress(0); setShowOrderDrawer(false);
+  };
+
+  // ── Board actions ──
+  const handleSetStatus = async (id, status) => {
+    // Pickup orders: when "Picked Up" pressed (done→sent), trigger payment first
+    if (status === "sent") {
+      const order = placedOrders.find(o => o.id === id);
+      if (order && order.fulfillment === "pickup") {
+        setPickupPaymentOrder(order);
+        setActiveOverlay("payment");
+        return; // don't update status yet — payment modal will do it
+      }
+    }
+    await updateOrderStatus(id, status);
+    setPlacedOrders(prev => prev.map(o => o.id === id ? { ...o, status } : o));
+  };
+
+  const handleDismiss = async (id) => {
+    await dismissOrder(id);
+    setPlacedOrders(prev => prev.filter(o => o.id !== id));
+  };
+
+  // ── Manager actions ──
+  const handleAddProduct = async (product) => {
+    const saved = await addProduct(product);
+    if (saved) setProducts(prev => [...prev, saved]);
+    return !!saved;
+  };
+
+  const handleDeleteProduct = async (id) => {
+    if (!window.confirm("Remove this product from the menu?")) return;
+    const ok = await deleteProduct(id);
+    if (ok) setProducts(prev => prev.filter(p => p.id !== id));
+  };
+
+  // ── Voice ──
+  const toggleVoice = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice notes require Chrome or Edge."); return; }
+    if (isRecording) { recognitionRef.current?.stop(); return; }
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = "en-US";
+    recognitionRef.current = rec;
+    savedTextRef.current = orderNotes;
+    rec.onstart = () => setIsRecording(true);
+    rec.onresult = (e) => {
+      let fc = "", ic = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) fc += e.results[i][0].transcript;
+        else ic += e.results[i][0].transcript;
+      }
+      if (fc) savedTextRef.current += fc + " ";
+      setOrderNotes(savedTextRef.current + ic);
+    };
+    rec.onerror = (e) => { setIsRecording(false); if (e.error === "not-allowed") alert("Microphone access denied."); };
+    rec.onend   = () => { setIsRecording(false); setOrderNotes(savedTextRef.current); };
+    rec.start();
+  };
+
+  // ── Receipt ──
+  const orderSummaryLines = pendingOrder ? (
+    <div style={{ background:"#FFF8F0", borderRadius:11, padding:14, textAlign:"left", fontSize:"0.85rem", margin:"12px 0" }}>
+      <div style={{ marginBottom:4 }}><strong>Order {pendingOrder.num}</strong> · {pendingOrder.fulfillment === "pickup" ? "🏃 Pickup" : "🛵 Delivery"}</div>
+      <div style={{ borderTop:"1px solid #E8D5C0", paddingTop:7, marginTop:7 }}>
+        {pendingOrder.items.map((i, idx) => (
+          <div key={idx} style={{ color:"#3D1F00", marginBottom:3 }}>
+            {i.qty}x {i.size ? i.size.label + " " : ""}{i.product.name} — ${i.price.toFixed(2)}
+          </div>
+        ))}
+      </div>
+      <div style={{ borderTop:"1px solid #E8D5C0", paddingTop:7, marginTop:7 }}><strong>Total: ${pendingOrder.total.toFixed(2)}</strong></div>
+      {pendingOrder.name && <div style={{ marginTop:5, color:"#3D1F00" }}>👤 {pendingOrder.name}{pendingOrder.phone ? ` · ${pendingOrder.phone}` : ""}</div>}
+      {pendingOrder.fulfillment === "delivery" && pendingOrder.address && <div style={{ marginTop:4, color:"#3D1F00" }}>📍 {pendingOrder.address}</div>}
+      {pendingOrder.notes && <div style={{ marginTop:4, color:"#3D1F00" }}>📝 {pendingOrder.notes}</div>}
+    </div>
+  ) : null;
+
+  const navItems = [
+    { key:"pos",     icon:"📋", label:"Order" },
+    { key:"board",   icon:"📜", label:"Board", badge: activeOrderCount },
+    { key:"manager", icon:"⚙️",  label:"Manager" },
+  ];
+
+  return (
+    <div style={{ minHeight:"100vh", maxHeight:"100vh", display:"flex", flexDirection:"column", fontFamily:"'DM Sans',sans-serif", background:"#FFF8F0", overflow:"hidden" }}>
+
+      {/* ── HEADER ── */}
+      <header style={{ background:"#E8251A", height: bp.isMobile ? 50 : 56, padding:`0 ${bp.isMobile ? 14 : 20}px`, display:"flex", alignItems:"stretch", boxShadow:"0 4px 12px rgba(232,37,26,0.3)", flexShrink:0, zIndex:10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, paddingRight: bp.isMobile ? 10 : 18, borderRight:"1px solid rgba(255,255,255,0.2)" }}>
+          <span style={{ fontSize: bp.isMobile ? "1.2rem" : "1.4rem" }}>🍕</span>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize: bp.isMobile ? "1.4rem" : "1.8rem", color:"white", letterSpacing:2 }}>PizzaPOS</span>
+        </div>
+        {!bp.isMobile && (
+          <nav style={{ display:"flex", alignItems:"stretch", marginLeft:6 }}>
+            {navItems.map(t => (
+              <button key={t.key} onClick={() => setTab(t.key)} style={{ display:"flex", alignItems:"center", gap:7, padding:"0 16px", color: tab === t.key ? "white" : "rgba(255,255,255,0.6)", fontWeight:600, fontSize:"0.85rem", cursor:"pointer", border:"none", borderBottom: tab === t.key ? "3px solid white" : "3px solid transparent", background:"none", transition:"all 0.2s" }}>
+                {t.icon} {t.label}
+                {t.badge !== undefined && <span style={{ background: tab === t.key ? "white" : "rgba(255,255,255,0.25)", color: tab === t.key ? "#E8251A" : "white", borderRadius:10, padding:"1px 7px", fontSize:"0.7rem", fontWeight:700 }}>{t.badge}</span>}
+              </button>
+            ))}
+          </nav>
+        )}
+        <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.85)", fontSize:"0.82rem", fontWeight:500, display:"flex", alignItems:"center", gap:10 }}>
+          {/* DB + CTI connection indicators */}
+          <span style={{ fontSize:"0.65rem", background:"rgba(255,255,255,0.15)", borderRadius:10, padding:"2px 8px", display:"flex", alignItems:"center", gap:4 }}>
+            <span style={{ width:6, height:6, borderRadius:"50%", background: productsLoading ? "#FCD34D" : "#4ADE80", display:"inline-block" }} />
+            {productsLoading ? "Connecting..." : "Live"}
+          </span>
+          <span title={ctiConnected ? "Phone system connected" : "Phone system offline"} style={{ fontSize:"0.65rem", background:"rgba(255,255,255,0.15)", borderRadius:10, padding:"2px 8px", display:"flex", alignItems:"center", gap:4 }}>
+            <span style={{ width:6, height:6, borderRadius:"50%", background: ctiConnected ? "#4ADE80" : "#F87171", display:"inline-block" }} />
+            {ctiConnected ? "📞 CTI" : "📞 Off"}
+          </span>
+          {clock}
+        </div>
+
+      </header>
+
+      {/* ── INCOMING CALL BANNER ── */}
+      {incomingCall && (
+        <div className="slide-in" style={{ background:"#16A34A", padding:"10px 20px", flexShrink:0, boxShadow:"0 4px 12px rgba(22,163,74,0.4)", zIndex:15 }}>
+          {/* Main call row */}
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ fontSize:"1.4rem" }} className="pulse-anim">📞</span>
+              <div>
+                <div style={{ color:"white", fontWeight:700, fontSize:"0.95rem" }}>
+                  Incoming Call — {incomingCall.callerName || "Unknown Caller"}
+                </div>
+                <div style={{ color:"rgba(255,255,255,0.85)", fontSize:"0.78rem" }}>
+                  {incomingCall.phone
+                    ? `(${incomingCall.phone.slice(0,3)}) ${incomingCall.phone.slice(3,6)}-${incomingCall.phone.slice(6)}`
+                    : "Unknown number"
+                  }
+                  {lookingUp && " · 🔍 Looking up..."}
+                  {foundCustomer && !lookingUp && ` · 🎉 ${foundCustomer.name} · ${foundCustomer.totalOrders} order${foundCustomer.totalOrders !== 1 ? "s" : ""}`}
+                  {!foundCustomer && !lookingUp && incomingCall.phone && " · New customer"}
+                </div>
+              </div>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              {activeCalls.length > 1 && (
+                <span style={{ background:"rgba(255,255,255,0.25)", color:"white", borderRadius:12, padding:"2px 10px", fontSize:"0.75rem", fontWeight:700 }}>
+                  +{activeCalls.length - 1} more call{activeCalls.length - 1 !== 1 ? "s" : ""}
+                </span>
+              )}
+              <button onClick={() => { setIncomingCall(null); setActiveCalls([]); }}
+                style={{ background:"rgba(255,255,255,0.2)", border:"none", borderRadius:"50%", width:28, height:28, color:"white", cursor:"pointer", fontSize:"0.85rem", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+            </div>
+          </div>
+          {/* Multiple calls queue */}
+          {activeCalls.length > 1 && (
+            <div style={{ marginTop:8, paddingTop:8, borderTop:"1px solid rgba(255,255,255,0.2)", display:"flex", gap:8, flexWrap:"wrap" }}>
+              {activeCalls.map((call, i) => (
+                <button key={call.channel || i} onClick={() => {
+                  setIncomingCall(call);
+                  handlePhoneChange(call.phone);
+                }} style={{ background: call.phone === incomingCall.phone ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", borderRadius:8, padding:"4px 12px", color:"white", fontSize:"0.75rem", fontWeight:600, cursor:"pointer" }}>
+                  📞 {call.phone ? `(${call.phone.slice(0,3)}) ${call.phone.slice(3,6)}-${call.phone.slice(6)}` : "Unknown"}
+                  {call.callerName ? ` — ${call.callerName}` : ""}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── MAIN ── */}
+      <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", position:"relative" }}>
+
+        {/* POS PAGE */}
+        {tab === "pos" && (
+          <div style={{ flex:1, display: bp.isDesktop ? "grid" : "flex", gridTemplateColumns: bp.isDesktop ? "1fr 380px" : undefined, flexDirection:"column", overflow:"hidden" }}>
+            <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", background:"#FFF8F0" }}>
+            {/* Mobile: always-visible mini order bar */}
+            {bp.isMobile && (
+              <div onClick={() => setShowOrderDrawer(true)}
+                style={{ background:"#1A0A00", padding:"10px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, cursor:"pointer", borderBottom:"2px solid #3D1F00" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <span style={{ fontSize:"1rem" }}>🛒</span>
+                  {order.length === 0 ? (
+                    <span style={{ color:"#5A3A1A", fontSize:"0.82rem" }}>No items yet</span>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column" }}>
+                      <span style={{ color:"white", fontSize:"0.82rem", fontWeight:600 }}>
+                        {order.map(i => `${i.qty > 1 ? i.qty+"x " : ""}${i.size ? i.size.label+" " : ""}${i.product.name}`).join(" · ")}
+                      </span>
+                      <span style={{ color:"#B89070", fontSize:"0.7rem" }}>{itemCount} item{itemCount !== 1 ? "s" : ""} · tap to edit</span>
+                    </div>
+                  )}
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                  <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", color:"#F97316", letterSpacing:1 }}>${total.toFixed(2)}</span>
+                  {order.length > 0 && (
+                    <button onClick={e => { e.stopPropagation(); handleCheckout(); }}
+                      style={{ background:"#E8251A", color:"white", border:"none", borderRadius:8, padding:"6px 12px", fontFamily:"'Bebas Neue',sans-serif", fontSize:"0.9rem", letterSpacing:1, cursor:"pointer" }}>
+                      ORDER
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {/* Category filters — pinned on mobile, scrolls with content on desktop */}
+            {bp.isMobile ? (
+              <div style={{ display:"flex", gap:6, flexWrap:"nowrap", overflowX:"auto", padding:"8px 12px", background:"#FFF8F0", borderBottom:"1px solid #E8D5C0", flexShrink:0, WebkitOverflowScrolling:"touch" }}>
+                {CAT_FILTERS.map(f => (
+                  <button key={f.key} onClick={() => setPosFilter(f.key)} style={{ flexShrink:0, padding:"6px 12px", borderRadius:20, border:`1.5px solid ${posFilter === f.key ? "#1A0A00" : "#E8D5C0"}`, background: posFilter === f.key ? "#1A0A00" : "white", color: posFilter === f.key ? "white" : "#7A5C40", fontSize:"0.82rem", fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" }}>
+                    {f.icon} {f.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div style={{ flex:1, padding: bp.isMobile ? "10px 12px 0" : "16px 20px 0", overflowY:"auto", display:"flex", flexDirection:"column", gap: bp.isMobile ? 8 : 12 }}>
+              {/* Category filters — desktop/tablet: scrolls with content */}
+              {!bp.isMobile && (
+                <div style={{ display:"flex", gap:6, flexWrap:"nowrap", overflowX:"auto", paddingBottom:4, WebkitOverflowScrolling:"touch" }}>
+                  {CAT_FILTERS.map(f => (
+                    <button key={f.key} onClick={() => setPosFilter(f.key)} style={{ flexShrink:0, padding:"5px 12px", borderRadius:20, border:`1.5px solid ${posFilter === f.key ? "#1A0A00" : "#E8D5C0"}`, background: posFilter === f.key ? "#1A0A00" : "white", color: posFilter === f.key ? "white" : "#7A5C40", fontSize:"0.78rem", fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" }}>
+                      {f.icon} {f.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Loading state */}
+              {productsLoading ? (
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"60px 20px", gap:14 }}>
+                  <div className="spinner" />
+                  <p style={{ color:"#7A5C40", fontSize:"0.9rem" }}>Loading menu from database...</p>
+                </div>
+              ) : filteredMenuProducts.length === 0 ? (
+                <div style={{ textAlign:"center", padding:"40px 20px", color:"#7A5C40", fontSize:"0.9rem" }}>No items here yet. Add some in the Manager tab!</div>
+              ) : bp.isMobile ? (
+                  <div style={{ display:"flex", flexDirection:"column", gap:5, paddingBottom:8 }}>
+                    {filteredMenuProducts.map(p => <MenuCardMobile key={p.id} product={p} onOpen={openModal} />)}
+                  </div>
+              ) : (
+                  <div style={{ display:"grid", gridTemplateColumns: bp.isTablet ? "repeat(3,1fr)" : "repeat(auto-fill,minmax(170px,1fr))", gap:12, paddingBottom:16 }}>
+                    {filteredMenuProducts.map(p => <MenuCard key={p.id} product={p} onOpen={openModal} isMobile={false} />)}
+                  </div>
+              )}
+            </div>{/* end scrollable area */}
+            </div>{/* end left column */}
+            {bp.isDesktop && (
+              <OrderPanel
+                order={order} setOrder={setOrder} fulfillment={fulfillment} setFulfillment={setFulfillment}
+                customerName={customerName} setCustomerName={setCustomerName}
+                customerPhone={customerPhone} onPhoneChange={handlePhoneChange}
+                customerAddress={customerAddress} setCustomerAddress={setCustomerAddress}
+                orderNotes={orderNotes} setOrderNotes={setOrderNotes}
+                foundCustomer={foundCustomer} lookingUp={lookingUp}
+                itemCount={itemCount} subtotal={subtotal} tax={tax} total={total}
+                onCheckout={handleCheckout} onClear={() => { if (window.confirm("Clear the entire order?")) { setOrder([]); setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setOrderNotes(""); setFoundCustomer(null); }}}
+                isRecording={isRecording} onToggleVoice={toggleVoice} isMobile={false}
+              />
+            )}
+
+            {bp.isTablet && (
+              <TabletOrderBar
+                order={order} setOrder={setOrder} fulfillment={fulfillment} setFulfillment={setFulfillment}
+                customerName={customerName} setCustomerName={setCustomerName}
+                customerPhone={customerPhone} onPhoneChange={handlePhoneChange}
+                customerAddress={customerAddress} setCustomerAddress={setCustomerAddress}
+                orderNotes={orderNotes} setOrderNotes={setOrderNotes}
+                foundCustomer={foundCustomer} lookingUp={lookingUp}
+                itemCount={itemCount} subtotal={subtotal} tax={tax} total={total}
+                onCheckout={handleCheckout} onClear={() => { setOrder([]); setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setOrderNotes(""); setFoundCustomer(null); }}
+                isRecording={isRecording} onToggleVoice={toggleVoice}
+              />
+            )}
+          </div>
+        )}
+
+        {/* BOARD PAGE */}
+        {tab === "board" && (
+          <BoardPage
+            placedOrders={placedOrders} boardFilter={boardFilter} setBoardFilter={setBoardFilter}
+            setStatus={handleSetStatus} onDismiss={handleDismiss}
+            isMobile={bp.isMobile} loading={ordersLoading}
+          />
+        )}
+
+        {/* MANAGER PAGE */}
+        {tab === "manager" && (
+          <ManagerPage products={products} onAdd={handleAddProduct} onDelete={handleDeleteProduct} isMobile={bp.isMobile} isTablet={bp.isTablet} />
+        )}
+      </div>
+
+      {/* MOBILE BOTTOM NAV */}
+      {bp.isMobile && (
+        <nav style={{ display:"flex", background:"#1A0A00", borderTop:"2px solid #E8251A", flexShrink:0, zIndex:20 }}>
+          {navItems.map(t => (
+            <button key={t.key} onClick={() => { setTab(t.key); setShowOrderDrawer(false); }} style={{ flex:1, padding:"10px 4px 8px", display:"flex", flexDirection:"column", alignItems:"center", gap:3, background:"none", border:"none", cursor:"pointer", borderTop: tab === t.key ? "2px solid #E8251A" : "2px solid transparent", marginTop:-2 }}>
+              <span style={{ fontSize:"1.2rem", position:"relative" }}>
+                {t.icon}
+                {t.badge > 0 && <span style={{ position:"absolute", top:-4, right:-6, background:"#E8251A", color:"white", borderRadius:"50%", width:14, height:14, fontSize:"0.55rem", fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>{t.badge}</span>}
+              </span>
+              <span style={{ fontSize:"0.65rem", fontWeight:600, color: tab === t.key ? "white" : "rgba(255,255,255,0.5)" }}>{t.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {/* MOBILE ORDER DRAWER */}
+      {bp.isMobile && showOrderDrawer && (
+        <>
+          <div onClick={() => setShowOrderDrawer(false)} style={{ position:"fixed", inset:0, background:"rgba(26,10,0,0.5)", zIndex:40 }} />
+          <div className="slide-up" style={{ position:"fixed", bottom:0, left:0, right:0, background:"#1A0A00", borderRadius:"20px 20px 0 0", maxHeight:"92vh", display:"flex", flexDirection:"column", zIndex:50, overflow:"hidden" }}>
+            <div style={{ padding:"12px 16px 0", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+              <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.3rem", letterSpacing:2, color:"white" }}>Current Order</span>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <span style={{ background:"#E8251A", color:"white", borderRadius:12, padding:"2px 10px", fontSize:"0.8rem", fontWeight:600 }}>{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+                <button onClick={() => setShowOrderDrawer(false)} style={{ background:"#3D1F00", border:"none", borderRadius:"50%", width:28, height:28, color:"#B89070", fontSize:"1rem", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+              </div>
+            </div>
+            <div style={{ flex:1, overflowY:"auto" }}>
+              <OrderPanel
+                order={order} setOrder={setOrder} fulfillment={fulfillment} setFulfillment={setFulfillment}
+                customerName={customerName} setCustomerName={setCustomerName}
+                customerPhone={customerPhone} onPhoneChange={handlePhoneChange}
+                customerAddress={customerAddress} setCustomerAddress={setCustomerAddress}
+                orderNotes={orderNotes} setOrderNotes={setOrderNotes}
+                foundCustomer={foundCustomer} lookingUp={lookingUp}
+                itemCount={itemCount} subtotal={subtotal} tax={tax} total={total}
+                onCheckout={handleCheckout} onClear={() => { setOrder([]); setCustomerName(""); setCustomerPhone(""); setCustomerAddress(""); setOrderNotes(""); setFoundCustomer(null); }}
+                isRecording={isRecording} onToggleVoice={toggleVoice} isMobile={true} hideHeader
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ITEM MODAL */}
+      {modalProduct && (
+        <div onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }} style={{ position:"fixed", inset:0, background:"rgba(26,10,0,0.6)", zIndex:100, display:"flex", alignItems: bp.isMobile ? "flex-end" : "center", justifyContent:"center" }}>
+          <div className={bp.isMobile ? "slide-up" : "pop-in"} style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 18, padding: bp.isMobile ? "20px 16px 28px" : 24, width: bp.isMobile ? "100%" : 480, maxHeight: bp.isMobile ? "90vh" : "88vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:3 }}>
+              <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.6rem", letterSpacing:2, color:"#1A0A00" }}>{modalProduct.emoji} {modalProduct.name}</h2>
+              <button onClick={closeModal} style={{ background:"#F3F4F6", border:"none", borderRadius:"50%", width:30, height:30, cursor:"pointer", fontSize:"0.9rem", color:"#7A5C40", flexShrink:0, marginLeft:8 }}>✕</button>
+            </div>
+            <p style={{ color:"#7A5C40", fontSize:"0.8rem", marginBottom:14 }}>
+              {modalProduct.category === "pizza" ? "Uncheck toppings you don't want — extra toppings +$0.50 each"
+               : modalProduct.category === "soda" ? "Choose your size"
+               : `$${modalProduct.price.toFixed(2)} each${modalProduct.note ? " — " + modalProduct.note : ""}`}
+            </p>
+            {(modalProduct.category === "pizza" || modalProduct.category === "soda") && (
+              <div style={{ display:"grid", gridTemplateColumns: modalProduct.category === "soda" ? "1fr 1fr" : "repeat(4,1fr)", gap:7, marginBottom:14 }}>
+                {modalProduct.category === "pizza"
+                  ? [["S", modalProduct.price], ["M", modalProduct.price + 4], ["L", modalProduct.price + 8], ["XL", 21.99]].map(([lbl, price]) => (
+                    <SizeBtn key={lbl} label={lbl === "S" ? "Small" : lbl === "M" ? "Medium" : lbl === "L" ? "Large" : "X-Large"} price={price} selected={modalSize.label === lbl} onClick={() => setModalSize({ label:lbl, price })} />
+                  ))
+                  : [["S", 1.50], ["L", 3.00]].map(([lbl, price]) => (
+                    <SizeBtn key={lbl} label={lbl === "S" ? "Small" : "Large"} price={price} selected={modalSize.label === lbl} onClick={() => setModalSize({ label:lbl, price })} />
+                  ))
+                }
+              </div>
+            )}
+            {modalProduct.category === "pizza" && (
+              <div style={{ marginBottom:4 }}>
+                <h4 style={{ fontWeight:600, fontSize:"0.8rem", color:"#3D1F00", marginBottom:8, textTransform:"uppercase", letterSpacing:1 }}>Toppings</h4>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
+                  {ALL_TOPPINGS.map(t => {
+                    const isChecked = modalToppings.includes(t.id);
+                    const isExtra   = isChecked && !modalDefaultToppings.includes(t.id);
+                    return (
+                      <div key={t.id} onClick={() => toggleModalTopping(t.id)} style={{ display:"flex", alignItems:"center", padding:"8px 9px", borderRadius:9, background: isChecked ? "#FFF0D0" : "#FFF8F0", border: isChecked ? "1.5px solid #F97316" : "1.5px solid transparent", cursor:"pointer", userSelect:"none", minHeight:40 }}>
+                        <input type="checkbox" checked={isChecked} readOnly style={{ accentColor:"#EA6B00", width:15, height:15, flexShrink:0, marginRight:7, pointerEvents:"none" }} />
+                        <span style={{ fontSize:"0.82rem", flex:1 }}>{t.label}</span>
+                        {isExtra && <span style={{ background:"#F97316", color:"white", fontSize:"0.58rem", padding:"1px 5px", borderRadius:4, fontWeight:700, marginLeft:"auto" }}>+$0.50</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div style={{ display:"flex", alignItems:"center", gap:14, margin:"14px 0" }}>
+              <label style={{ fontWeight:600, fontSize:"0.9rem" }}>Qty:</label>
+              <button onClick={() => setModalQty(q => Math.max(1, q - 1))} style={{ width:36, height:36, borderRadius:"50%", border:"2px solid #E8D5C0", background:"white", cursor:"pointer", fontSize:"1.1rem", display:"flex", alignItems:"center", justifyContent:"center" }}>−</button>
+              <span style={{ fontWeight:700, fontSize:"1.1rem", minWidth:24, textAlign:"center" }}>{modalQty}</span>
+              <button onClick={() => setModalQty(q => q + 1)} style={{ width:36, height:36, borderRadius:"50%", border:"2px solid #E8D5C0", background:"white", cursor:"pointer", fontSize:"1.1rem", display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
+            </div>
+            <div style={{ display:"flex", gap:9, marginTop:14 }}>
+              <button onClick={closeModal} style={{ flex:1, padding:12, border:"2px solid #E8D5C0", borderRadius:10, background:"white", cursor:"pointer", fontSize:"0.9rem", color:"#3D1F00" }}>Cancel</button>
+              <button onClick={addToOrder} style={{ flex:2, padding:12, border:"none", borderRadius:10, background:"#E8251A", color:"white", cursor:"pointer", fontSize:"0.95rem", fontWeight:600 }}>Add to Order</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ORDER PLACED (PICKUP) — no payment yet, happens on pickup */}
+      {activeOverlay === "orderPlaced" && (
+        <Overlay isMobile={bp.isMobile}>
+          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "28px 20px 36px" : 36, textAlign:"center", width: bp.isMobile ? "100%" : undefined, maxWidth: bp.isMobile ? undefined : 400 }}>
+            <div style={{ fontSize:"3.2rem", marginBottom:12 }}>✅</div>
+            <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.9rem", letterSpacing:2, color:"#1A0A00", marginBottom:6 }}>Order Placed!</h2>
+            <div style={{ background:"#FEF3C7", border:"1.5px solid #D97706", borderRadius:10, padding:"8px 14px", display:"inline-flex", alignItems:"center", gap:7, marginBottom:10 }}>
+              <span>🏃</span>
+              <span style={{ fontWeight:700, color:"#92400E", fontSize:"0.9rem" }}>Payment collected on pickup</span>
+            </div>
+            {orderSummaryLines}
+            <button onClick={newOrder} style={{ background:"#E8251A", color:"white", border:"none", borderRadius:11, padding:"13px 28px", fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", letterSpacing:2, cursor:"pointer", marginTop:6, width:"100%" }}>NEW ORDER</button>
+            <button onClick={() => { newOrder(); setTab("board"); }} style={{ marginTop:8, background:"none", border:"none", color:"#7A5C40", fontSize:"0.82rem", cursor:"pointer", textDecoration:"underline" }}>View Orders Board</button>
+          </div>
+        </Overlay>
+      )}
+
+      {/* PAYMENT MODAL */}
+      {activeOverlay === "payment" && (
+        <Overlay isMobile={bp.isMobile}>
+          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "28px 20px 36px" : 36, textAlign:"center", width: bp.isMobile ? "100%" : undefined, maxWidth: bp.isMobile ? undefined : 380 }}>
+            {placingOrder ? (
+              <div style={{ padding:"20px 0" }}>
+                <div className="spinner" style={{ margin:"0 auto 14px" }} />
+                <p style={{ color:"#7A5C40" }}>Saving order...</p>
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:"2.5rem", marginBottom:10 }}>💳</div>
+                <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.8rem", letterSpacing:2, color:"#1A0A00", marginBottom:6 }}>
+                  {pickupPaymentOrder ? "Collect Payment" : "Payment Method"}
+                </h2>
+                <p style={{ color:"#7A5C40", fontSize:"0.85rem", margin:"6px 0 18px" }}>
+                  {pickupPaymentOrder
+                    ? `Order ${pickupPaymentOrder.num} — $${pickupPaymentOrder.total.toFixed(2)} — ${pickupPaymentOrder.name || "Customer"} is here to pick up`
+                    : "How would the customer like to pay?"}
+                </p>
+                <div style={{ display:"flex", gap:12, marginBottom:10 }}>
+                  <PayBtn icon="💵" label="CASH" sub="Collect from customer" bg="#F0FDF4" border="#16A34A" textColor="#14532D" onClick={() => processPayment("cash")} />
+                  <PayBtn icon="💳" label="CARD" sub="Send to card machine" bg="#EFF6FF" border="#2563EB" textColor="#1E3A8A" onClick={() => processPayment("card")} />
+                </div>
+                <button onClick={cancelPayment} style={{ background:"none", border:"none", color:"#7A5C40", fontSize:"0.85rem", cursor:"pointer", textDecoration:"underline" }}>Cancel</button>
+              </>
+            )}
+          </div>
+        </Overlay>
+      )}
+
+      {/* CARD MODAL */}
+      {activeOverlay === "card" && (
+        <Overlay isMobile={bp.isMobile}>
+          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "28px 20px 36px" : 36, textAlign:"center", width: bp.isMobile ? "100%" : undefined, maxWidth: bp.isMobile ? undefined : 360, overflowY:"auto", maxHeight: bp.isMobile ? "80vh" : undefined }}>
+            {!cardApproved ? (
+              <>
+                <div className="card-pulse" style={{ fontSize:"2.8rem", marginBottom:12 }}>💳</div>
+                <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.6rem", color:"#2563EB", letterSpacing:2 }}>Processing...</h2>
+                <p style={{ color:"#7A5C40", fontSize:"0.85rem", marginTop:8 }}>Please present card or tap device</p>
+                <div style={{ margin:"20px auto", width:"80%", maxWidth:200, height:6, background:"#E2E8F0", borderRadius:3, overflow:"hidden" }}>
+                  <div style={{ height:"100%", width:`${cardProgress}%`, background: cardProgress === 100 ? "#16A34A" : "#2563EB", borderRadius:3, transition:"width 0.4s ease" }} />
+                </div>
+                <div style={{ fontSize:"0.8rem", color:"#7A5C40", minHeight:20 }}>{cardStatus}</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize:"3rem", marginBottom:12 }}>✅</div>
+                <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.9rem", letterSpacing:2, color:"#16A34A", marginBottom:6 }}>Approved!</h2>
+                <p style={{ color:"#7A5C40", fontSize:"0.85rem" }}>Transaction Successful</p>
+                <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.05rem", color:"#7A5C40", letterSpacing:2, marginBottom:12 }}>{cardApprovalCode}</div>
+                {orderSummaryLines}
+                <button onClick={newOrder} style={{ background:"#E8251A", color:"white", border:"none", borderRadius:11, padding:"13px 28px", fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", letterSpacing:2, cursor:"pointer", marginTop:6, width:"100%" }}>NEW ORDER</button>
+                <button onClick={() => { newOrder(); setTab("board"); }} style={{ marginTop:8, background:"none", border:"none", color:"#7A5C40", fontSize:"0.82rem", cursor:"pointer", textDecoration:"underline" }}>View Orders Board</button>
+              </>
+            )}
+          </div>
+        </Overlay>
+      )}
+
+      {/* CASH MODAL */}
+      {activeOverlay === "cash" && (
+        <Overlay isMobile={bp.isMobile}>
+          <div className="pop-in" style={{ background:"white", borderRadius: bp.isMobile ? "20px 20px 0 0" : 22, padding: bp.isMobile ? "28px 20px 36px" : 36, textAlign:"center", width: bp.isMobile ? "100%" : undefined, maxWidth: bp.isMobile ? undefined : 400, overflowY:"auto", maxHeight: bp.isMobile ? "80vh" : undefined }}>
+            <div style={{ fontSize:"3.2rem", marginBottom:12 }}>✓</div>
+            <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.9rem", letterSpacing:2, color:"#16A34A", marginBottom:6 }}>Order Placed!</h2>
+            <div style={{ background:"#F0FDF4", border:"1.5px solid #16A34A", borderRadius:10, padding:"8px 14px", display:"inline-flex", alignItems:"center", gap:7, marginBottom:8 }}>
+              <span>💵</span><span style={{ fontWeight:700, color:"#14532D", fontSize:"0.9rem" }}>Cash Payment</span>
+            </div>
+            {orderSummaryLines}
+            <button onClick={newOrder} style={{ background:"#E8251A", color:"white", border:"none", borderRadius:11, padding:"13px 28px", fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", letterSpacing:2, cursor:"pointer", marginTop:6, width:"100%" }}>NEW ORDER</button>
+            <button onClick={() => { newOrder(); setTab("board"); }} style={{ marginTop:8, background:"none", border:"none", color:"#7A5C40", fontSize:"0.82rem", cursor:"pointer", textDecoration:"underline" }}>View Orders Board</button>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MENU CARD
+// ─────────────────────────────────────────────
+function MenuCard({ product:p, onOpen, isMobile }) {
+  const cc = CAT_COLORS[p.category];
+  const isPizza = p.category === "pizza";
+  const subText = isPizza
+    ? (p.defaultToppings.length ? p.defaultToppings.map(t => ALL_TOPPINGS.find(x => x.id === t)?.label || "").join(", ") : "Choose toppings")
+    : (p.note || "");
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div onClick={() => onOpen(p)} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{ background:"white", borderRadius: isMobile ? 12 : 14, padding: isMobile ? 10 : 14, cursor:"pointer", border:`2px solid ${hovered ? "#F97316" : "transparent"}`, transition:"all 0.2s", boxShadow: hovered ? "0 6px 20px rgba(249,115,22,0.15)" : "0 2px 8px rgba(0,0,0,0.06)", position:"relative", transform: hovered ? "translateY(-2px)" : "none" }}>
+      <span style={{ ...cc, fontSize:"0.58rem", fontWeight:700, padding:"2px 5px", borderRadius:5, textTransform:"uppercase", letterSpacing:0.5, position:"absolute", top: isMobile ? 6 : 8, left: isMobile ? 6 : 8 }}>{CAT_LABEL[p.category]}</span>
+      <button onClick={(e) => { e.stopPropagation(); onOpen(p); }} style={{ position:"absolute", top: isMobile ? 6 : 10, right: isMobile ? 6 : 10, background:"#E8251A", color:"white", border:"none", width: isMobile ? 24 : 26, height: isMobile ? 24 : 26, borderRadius:"50%", fontSize:"0.95rem", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>+</button>
+      <span style={{ fontSize: isMobile ? "1.8rem" : "2.2rem", marginBottom: isMobile ? 5 : 7, display:"block", marginTop:16 }}>{p.emoji}</span>
+      <div style={{ fontWeight:600, fontSize: isMobile ? "0.82rem" : "0.9rem", color:"#1A0A00", marginBottom:2 }}>{p.name}</div>
+      {!isMobile && <div style={{ fontSize:"0.72rem", color:"#7A5C40", marginBottom:6, lineHeight:1.4 }}>{subText}</div>}
+      {!isMobile && !isPizza && p.note && <div style={{ fontSize:"0.68rem", color:"#D97706", fontStyle:"italic", marginTop:3, lineHeight:1.3 }}>ℹ {p.note}</div>}
+      <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize: isMobile ? "1rem" : "1.2rem", color:"#E8251A", letterSpacing:1 }}>${p.price.toFixed(2)}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// SIZE BUTTON
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// MENU CARD MOBILE — compact list row, no emoji
+// ─────────────────────────────────────────────
+function MenuCardMobile({ product:p, onOpen }) {
+  const cc = CAT_COLORS[p.category];
+  const isPizza = p.category === "pizza";
+  const [pressed, setPressed] = useState(false);
+  return (
+    <div onClick={() => onOpen(p)}
+      onTouchStart={() => setPressed(true)} onTouchEnd={() => setPressed(false)}
+      style={{ background: pressed ? "#FFF0EF" : "white", borderRadius:10, padding:"9px 12px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", border:`1.5px solid ${pressed ? "#F97316" : "#E8D5C0"}`, transition:"all 0.15s", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+      {/* Category dot */}
+      <span style={{ width:8, height:8, borderRadius:"50%", background:cc.text, flexShrink:0 }} />
+      {/* Name + note */}
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontWeight:600, fontSize:"0.88rem", color:"#1A0A00", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{p.name}</div>
+        {p.note && !isPizza && <div style={{ fontSize:"0.68rem", color:"#D97706", fontStyle:"italic", marginTop:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{p.note}</div>}
+        {isPizza && <div style={{ fontSize:"0.68rem", color:"#7A5C40", marginTop:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{p.defaultToppings.map(t => ALL_TOPPINGS.find(x => x.id === t)?.label || "").join(", ")}</div>}
+      </div>
+      {/* Price */}
+      <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.05rem", color:"#E8251A", letterSpacing:1, flexShrink:0 }}>${p.price.toFixed(2)}</div>
+      {/* Add button */}
+      <button onClick={e => { e.stopPropagation(); onOpen(p); }}
+        style={{ background:"#E8251A", color:"white", border:"none", width:26, height:26, borderRadius:"50%", fontSize:"1rem", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>+</button>
+    </div>
+  );
+}
+
+function SizeBtn({ label, price, selected, onClick }) {
+  return (
+    <div onClick={onClick} style={{ padding:"10px 8px", border:`2px solid ${selected ? "#E8251A" : "#E8D5C0"}`, borderRadius:10, background: selected ? "#FFF0EF" : "white", cursor:"pointer", textAlign:"center", transition:"all 0.2s", minHeight:52 }}>
+      <div style={{ fontWeight:600, fontSize:"0.85rem", color:"#1A0A00" }}>{label}</div>
+      <div style={{ fontSize:"0.75rem", color:"#7A5C40" }}>${price.toFixed(2)}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CUSTOMER BADGE (shows when phone found)
+// ─────────────────────────────────────────────
+function CustomerBadge({ customer }) {
+  if (!customer) return null;
+  return (
+    <div className="slide-in" style={{ background:"#F0FDF4", border:"1.5px solid #16A34A", borderRadius:10, padding:"8px 12px", marginBottom:8, display:"flex", alignItems:"center", gap:10 }}>
+      <span style={{ fontSize:"1.4rem" }}>🎉</span>
+      <div style={{ flex:1 }}>
+        <div style={{ fontWeight:700, fontSize:"0.85rem", color:"#14532D" }}>Welcome back, {customer.name || "customer"}!</div>
+        <div style={{ fontSize:"0.72rem", color:"#16A34A", marginTop:1 }}>
+          {customer.totalOrders} order{customer.totalOrders !== 1 ? "s" : ""} · ${customer.totalSpent.toFixed(2)} total spent
+          {customer.lastOrderAt && ` · Last visit: ${new Date(customer.lastOrderAt).toLocaleDateString()}`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ORDER PANEL
+// ─────────────────────────────────────────────
+function OrderPanel({ order, setOrder, fulfillment, setFulfillment, customerName, setCustomerName, customerPhone, onPhoneChange, customerAddress, setCustomerAddress, orderNotes, setOrderNotes, foundCustomer, lookingUp, itemCount, subtotal, tax, total, onCheckout, onClear, isRecording, onToggleVoice, isMobile, hideHeader }) {
+  return (
+    <div style={{ background:"#1A0A00", color:"white", display:"flex", flexDirection:"column", overflow:"hidden", borderLeft: isMobile ? "none" : "3px solid #E8251A", height: isMobile ? "auto" : "100%" }}>
+      {!hideHeader && (
+        <div style={{ padding:"14px 18px", background:"#3D1F00", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+          <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.4rem", letterSpacing:2 }}>Current Order</h2>
+          <span style={{ background:"#E8251A", color:"white", borderRadius:12, padding:"2px 10px", fontSize:"0.82rem", fontWeight:600 }}>{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+        </div>
+      )}
+      <div style={{ padding:"10px 16px", background:"#2A1200", display:"flex", gap:8, flexShrink:0 }}>
+        {["pickup","delivery"].map(f => (
+          <button key={f} onClick={() => setFulfillment(f)} style={{ flex:1, padding:"10px", borderRadius:10, border:"none", fontSize:"0.88rem", fontWeight:600, cursor:"pointer", transition:"all 0.2s", background: fulfillment === f ? "#E8251A" : "#3D1F00", color: fulfillment === f ? "white" : "#B89070" }}>
+            {f === "pickup" ? "🏃 Pickup" : "🛵 Delivery"}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding:"10px 16px", background:"#1F0D00", borderBottom:"1px solid #3D1F00", flexShrink:0 }}>
+        <h4 style={{ fontSize:"0.68rem", textTransform:"uppercase", letterSpacing:1, color:"#B89070", marginBottom:8, fontWeight:600 }}>Customer Info</h4>
+
+        {/* Customer badge when phone matched */}
+        <CustomerBadge customer={foundCustomer} />
+
+        {fulfillment === "pickup" ? (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7, marginBottom:7 }}>
+              <Field label="Client Name" value={customerName} onChange={setCustomerName} placeholder="John Doe" />
+              <PhoneField label="Phone" value={customerPhone} onChange={onPhoneChange} lookingUp={lookingUp} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom:7 }}>
+              <PhoneField label="Phone Number" value={customerPhone} onChange={onPhoneChange} lookingUp={lookingUp} />
+            </div>
+            <div style={{ marginBottom:7 }}>
+              <Field label="Delivery Address" value={customerAddress} onChange={setCustomerAddress} placeholder="Enter street address..." />
+            </div>
+          </>
+        )}
+      </div>
+      <div style={{ flex: isMobile ? "none" : 1, overflowY: isMobile ? "visible" : "auto", padding:"10px 16px" }}>
+        {order.length === 0 ? (
+          <div style={{ textAlign:"center", padding:"24px 16px", color:"#5A3A1A" }}>
+            <div style={{ fontSize:"2.4rem", marginBottom:8 }}>🍕</div>
+            <p style={{ fontSize:"0.85rem" }}>No items yet. Tap a product!</p>
+          </div>
+        ) : order.map(item => {
+          const isPizza  = item.product.category === "pizza";
+          const detail   = isPizza ? (item.toppings.map(tid => ALL_TOPPINGS.find(t => t.id === tid)?.label || "").join(", ") || "Plain") : (item.product.note || "");
+          const sizePart = item.size ? item.size.label + " " : "";
+          return (
+            <div key={item.id} className="slide-in" style={{ background:"#2A1200", borderRadius:10, padding:"9px 10px", marginBottom:6, display:"flex", alignItems:"flex-start", gap:8 }}>
+              <span style={{ fontSize:"1.3rem", flexShrink:0 }}>{item.product.emoji}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:600, fontSize:"0.86rem" }}>{item.qty > 1 ? `${item.qty}x ` : ""}{sizePart}{item.product.name}</div>
+                {detail && <div style={{ fontSize:"0.68rem", color:"#B89070", marginTop:2, lineHeight:1.3 }}>{detail}</div>}
+              </div>
+              <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1rem", color:"#F97316", letterSpacing:1, whiteSpace:"nowrap" }}>${item.price.toFixed(2)}</div>
+              <button onClick={() => setOrder(prev => prev.filter(i => i.id !== item.id))} style={{ background:"none", border:"none", color:"#7A5C40", cursor:"pointer", fontSize:"0.9rem", padding:0 }}>✕</button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding:"10px 16px", background:"#1F0D00", borderTop:"1px solid #3D1F00", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5 }}>
+          <label style={{ fontSize:"0.68rem", textTransform:"uppercase", letterSpacing:1, color:"#B89070", fontWeight:600 }}>Order Notes</label>
+          <button onClick={onToggleVoice} className={isRecording ? "pulse-anim" : ""} style={{ display:"flex", alignItems:"center", gap:4, background: isRecording ? "#E8251A" : "#2A1200", border:`1px solid ${isRecording ? "#E8251A" : "#5A3A1A"}`, color: isRecording ? "white" : "#B89070", borderRadius:20, padding:"4px 10px", fontSize:"0.72rem", cursor:"pointer" }}>
+            {isRecording ? "🔴 Stop" : "🎙️ Voice"}
+          </button>
+        </div>
+        <textarea value={orderNotes} onChange={e => setOrderNotes(e.target.value)} placeholder="Special instructions..." style={{ width:"100%", background:"#2A1200", border:"1px solid #5A3A1A", borderRadius:7, color:"white", fontFamily:"'DM Sans',sans-serif", fontSize:"0.82rem", padding:"7px 9px", resize:"none", height:54, outline:"none" }} />
+      </div>
+      <div style={{ padding:"12px 16px", background:"#2A1200", borderTop:"2px solid #3D1F00", flexShrink:0 }}>
+        {[["Subtotal", `$${subtotal.toFixed(2)}`], ["Tax (8%)", `$${tax.toFixed(2)}`]].map(([k,v]) => (
+          <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:"0.82rem", color:"#B89070", marginBottom:4 }}><span>{k}</span><span>{v}</span></div>
+        ))}
+        <div style={{ display:"flex", justifyContent:"space-between", fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.3rem", color:"white", letterSpacing:1, marginTop:6, paddingTop:6, borderTop:"1px solid #5A3A1A" }}>
+          <span>TOTAL</span><span>${total.toFixed(2)}</span>
+        </div>
+        <button onClick={onCheckout} disabled={order.length === 0} style={{ width:"100%", padding:13, background: order.length === 0 ? "#5A3A1A" : "#E8251A", color:"white", border:"none", borderRadius:11, fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.3rem", letterSpacing:2, cursor: order.length === 0 ? "not-allowed" : "pointer", marginTop:10 }}>PLACE ORDER</button>
+        <button onClick={onClear} style={{ width:"100%", padding:7, background:"transparent", color:"#7A5C40", border:"1px solid #3D1F00", borderRadius:9, fontSize:"0.78rem", cursor:"pointer", marginTop:5 }}>Clear Order</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PHONE FIELD with lookup spinner
+// ─────────────────────────────────────────────
+function PhoneField({ label, value, onChange, lookingUp }) {
+  return (
+    <div>
+      <label style={{ display:"block", fontSize:"0.68rem", color:"#B89070", marginBottom:3, textTransform:"uppercase", letterSpacing:0.5 }}>{label}</label>
+      <div style={{ position:"relative" }}>
+        <input type="tel" value={value} onChange={e => onChange(e.target.value)} placeholder="(555) 000-0000"
+          style={{ width:"100%", padding:"8px 32px 8px 10px", background:"#2A1200", border:"1px solid #5A3A1A", borderRadius:7, color:"white", fontFamily:"'DM Sans',sans-serif", fontSize:"0.85rem", outline:"none" }} />
+        {lookingUp && (
+          <div style={{ position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", width:14, height:14, border:"2px solid #5A3A1A", borderTopColor:"#F97316", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// FIELD
+// ─────────────────────────────────────────────
+function Field({ label, value, onChange, placeholder, type="text" }) {
+  return (
+    <div>
+      <label style={{ display:"block", fontSize:"0.68rem", color:"#B89070", marginBottom:3, textTransform:"uppercase", letterSpacing:0.5 }}>{label}</label>
+      <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        style={{ width:"100%", padding:"8px 10px", background:"#2A1200", border:"1px solid #5A3A1A", borderRadius:7, color:"white", fontFamily:"'DM Sans',sans-serif", fontSize:"0.85rem", outline:"none" }} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// TABLET ORDER BAR
+// ─────────────────────────────────────────────
+function TabletOrderBar(props) {
+  const [expanded, setExpanded] = useState(false);
+  const { itemCount, total } = props;
+  return (
+    <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:30, background:"#1A0A00", borderTop:"2px solid #E8251A", boxShadow:"0 -4px 20px rgba(0,0,0,0.3)" }}>
+      <div onClick={() => setExpanded(e => !e)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px", cursor:"pointer" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.1rem", color:"white", letterSpacing:2 }}>🛒 CURRENT ORDER</span>
+          {itemCount > 0 && <span style={{ background:"#E8251A", color:"white", borderRadius:12, padding:"2px 10px", fontSize:"0.82rem", fontWeight:700 }}>{itemCount} items</span>}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          {itemCount > 0 && <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", color:"#F97316" }}>${total.toFixed(2)}</span>}
+          <span style={{ color:"#B89070", fontSize:"1rem" }}>{expanded ? "▼" : "▲"}</span>
+        </div>
+      </div>
+      {expanded && (
+        <div style={{ maxHeight:"60vh", overflowY:"auto", borderTop:"1px solid #3D1F00" }}>
+          <OrderPanel {...props} isMobile={false} hideHeader />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// BOARD PAGE
+// ─────────────────────────────────────────────
+function BoardPage({ placedOrders, boardFilter, setBoardFilter, setStatus, onDismiss, isMobile, loading }) {
+  const COLS = [
+    { key:"new",  label:"📋 NEW",       colors:{ border:"#64748B", bg:"#F8FAFC", titleColor:"#475569", cntBg:"#E2E8F0", cntColor:"#475569" } },
+    { key:"prep", label:"🔥 PREPARING", colors:{ border:"#D97706", bg:"#FFFBEB", titleColor:"#92400E", cntBg:"#FEF3C7", cntColor:"#92400E" } },
+    { key:"done", label:"✅ READY",      colors:{ border:"#16A34A", bg:"#F0FDF4", titleColor:"#14532D", cntBg:"#DCFCE7", cntColor:"#14532D" } },
+    { key:"sent", label:"✓ DONE",       colors:{ border:"#2563EB", bg:"#EFF6FF", titleColor:"#1E3A8A", cntBg:"#DBEAFE", cntColor:"#1E3A8A" } },
+  ];
+  const filtered = boardFilter === "all" ? placedOrders : placedOrders.filter(o => o.fulfillment === boardFilter);
+  const byStatus = { new:[], prep:[], done:[], sent:[] };
+  filtered.forEach(o => { if (byStatus[o.status]) byStatus[o.status].push(o); });
+
+  return (
+    <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+      <div style={{ padding: isMobile ? "10px 14px" : "14px 22px", background:"white", borderBottom:"2px solid #E8D5C0", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, flexWrap:"wrap", gap:8 }}>
+        <h2 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize: isMobile ? "1.1rem" : "1.4rem", letterSpacing:2, color:"#1A0A00" }}>📜 Orders Board</h2>
+        <div style={{ display:"flex", gap:6 }}>
+          {["all","pickup","delivery"].map(f => (
+            <button key={f} onClick={() => setBoardFilter(f)} style={{ padding: isMobile ? "4px 10px" : "5px 13px", borderRadius:20, border:`1.5px solid ${boardFilter === f ? "#1A0A00" : "#E8D5C0"}`, background: boardFilter === f ? "#1A0A00" : "white", color: boardFilter === f ? "white" : "#7A5C40", fontSize:"0.75rem", fontWeight:600, cursor:"pointer" }}>
+              {f === "all" ? "All" : f === "pickup" ? (isMobile ? "🏃" : "🏃 Pickup") : (isMobile ? "🛵" : "🛵 Delivery")}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", flex:1, gap:14 }}>
+          <div className="spinner" />
+          <p style={{ color:"#7A5C40", fontSize:"0.9rem" }}>Loading orders from database...</p>
+        </div>
+      ) : (
+        <div style={{ flex:1, overflow: isMobile ? "auto" : "hidden", display: isMobile ? "block" : "grid", gridTemplateColumns: isMobile ? undefined : "1fr 1fr 1fr 1fr" }}>
+          {isMobile ? (
+            <div style={{ padding:"10px 12px", display:"flex", flexDirection:"column", gap:16 }}>
+              {COLS.map(col => {
+                const items = byStatus[col.key];
+                if (!items.length) return null;
+                return (
+                  <div key={col.key}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, paddingBottom:6, borderBottom:`2px solid ${col.colors.border}` }}>
+                      <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"0.95rem", letterSpacing:1.5, color:col.colors.titleColor }}>{col.label}</span>
+                      <span style={{ background:col.colors.cntBg, color:col.colors.cntColor, borderRadius:10, padding:"1px 7px", fontSize:"0.7rem", fontWeight:700 }}>{items.length}</span>
+                    </div>
+                    {items.map(o => <BoardCard key={o.id} order={o} onSetStatus={setStatus} onDismiss={onDismiss} isMobile />)}
+                  </div>
+                );
+              })}
+              {placedOrders.length === 0 && <div style={{ textAlign:"center", padding:"50px 20px", color:"#CBD5E1" }}>No orders yet</div>}
+            </div>
+          ) : (
+            COLS.map(col => {
+              const cc = col.colors;
+              const items = byStatus[col.key];
+              return (
+                <div key={col.key} style={{ display:"flex", flexDirection:"column", borderRight:"1px solid #E8D5C0", overflow:"hidden" }}>
+                  <div style={{ padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0, borderBottom:`3px solid ${cc.border}`, background:cc.bg }}>
+                    <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1rem", letterSpacing:1.5, color:cc.titleColor }}>{col.label}</span>
+                    <span style={{ background:cc.cntBg, color:cc.cntColor, borderRadius:10, padding:"1px 7px", fontSize:"0.7rem", fontWeight:700 }}>{items.length}</span>
+                  </div>
+                  <div style={{ flex:1, overflowY:"auto", padding:10 }}>
+                    {items.length === 0
+                      ? <div style={{ textAlign:"center", padding:"28px 8px", color:"#CBD5E1", fontSize:"0.82rem" }}>No orders here</div>
+                      : items.map(o => <BoardCard key={o.id} order={o} onSetStatus={setStatus} onDismiss={onDismiss} />)
+                    }
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// BOARD CARD
+// ─────────────────────────────────────────────
+function BoardCard({ order:o, onSetStatus, onDismiss }) {
+  const isDelivery = o.fulfillment === "delivery";
+  const canDismiss = o.status === "done" || o.status === "sent";
+  let actionBtn = null;
+  if (o.status === "new")        actionBtn = <StatusBtn label="🔥 Start Preparing" bg="#FEF3C7" color="#92400E" hoverBg="#FDE68A" onClick={() => onSetStatus(o.id,"prep")} />;
+  else if (o.status === "prep")  actionBtn = isDelivery
+    ? <StatusBtn label="🛵 Send to Delivery" bg="#DBEAFE" color="#1E3A8A" hoverBg="#BFDBFE" onClick={() => onSetStatus(o.id,"sent")} />
+    : <StatusBtn label="✅ Ready for Pickup" bg="#DCFCE7" color="#14532D" hoverBg="#BBF7D0" onClick={() => onSetStatus(o.id,"done")} />;
+  else if (o.status === "done")  actionBtn = <StatusBtn label="💳 Collect & Pick Up" bg="#DBEAFE" color="#1E3A8A" hoverBg="#BFDBFE" onClick={() => onSetStatus(o.id,"sent")} />;
+
+  return (
+    <div className="card-in" style={{ background:"white", borderRadius:13, padding:12, marginBottom:9, boxShadow:"0 2px 8px rgba(0,0,0,0.07)", border:"1.5px solid #E8D5C0", position:"relative" }}>
+      {canDismiss && <button onClick={() => onDismiss(o.id)} style={{ position:"absolute", top:8, right:8, background:"#FEE2E2", border:"none", borderRadius:6, width:22, height:22, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"0.72rem", color:"#991B1B" }}>✕</button>}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5, paddingRight: canDismiss ? 28 : 0 }}>
+        <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1rem", letterSpacing:1, color:"#1A0A00" }}>Order {o.num}</span>
+        <span style={{ fontSize:"0.68rem", fontWeight:700, padding:"2px 7px", borderRadius:7, background: isDelivery ? "#DBEAFE" : "#FEF3C7", color: isDelivery ? "#1E3A8A" : "#92400E" }}>
+          {isDelivery ? "🛵 Delivery" : "🏃 Pickup"}
+        </span>
+      </div>
+      <div style={{ fontSize:"0.68rem", color:"#7A5C40", marginBottom:5 }}>🕐 {o.timeStr}</div>
+      {o.name && <div style={{ fontSize:"0.78rem", fontWeight:600, color:"#1A0A00", marginBottom:3 }}>👤 {o.name}{o.phone ? ` · ${o.phone}` : ""}</div>}
+      {o.phone && !o.name && <div style={{ fontSize:"0.78rem", fontWeight:600, color:"#1A0A00", marginBottom:3 }}>📞 {o.phone}</div>}
+      {o.address && <div style={{ fontSize:"0.7rem", color:"#7A5C40", marginBottom:6 }}>📍 {o.address}</div>}
+      <div style={{ marginBottom:7 }}>
+        {o.items.map((item,i) => {
+          const isPizza  = item.product.category === "pizza";
+          const detail   = isPizza ? item.toppings.map(tid => ALL_TOPPINGS.find(t => t.id === tid)?.label || "").join(", ") : (item.product.note || "");
+          const sizePart = item.size ? item.size.label + " " : "";
+          return (
+            <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:4, fontSize:"0.74rem", color:"#3D1F00", padding:"2px 0", lineHeight:1.3 }}>
+              <span style={{ flexShrink:0 }}>{item.product.emoji} {item.qty > 1 ? `${item.qty}x ` : ""}{sizePart}{item.product.name}</span>
+              {detail && <span style={{ marginLeft:"auto", color:"#7A5C40", fontSize:"0.66rem", textAlign:"right", maxWidth:"50%" }}>{detail}</span>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"0.98rem", color:"#E8251A", letterSpacing:1, marginBottom:7 }}>${o.total.toFixed(2)}</div>
+      {o.notes && <div style={{ background:"#FFFBEB", borderRadius:7, padding:"5px 7px", fontSize:"0.7rem", color:"#78350F", marginBottom:7, borderLeft:"3px solid #D97706" }}>📝 {o.notes}</div>}
+      {actionBtn && <div style={{ display:"flex", gap:5 }}>{actionBtn}</div>}
+    </div>
+  );
+}
+
+function StatusBtn({ label, bg, color, hoverBg, onClick }) {
+  const [h, setH] = useState(false);
+  return (
+    <button onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onClick={onClick}
+      style={{ flex:1, padding:"7px 6px", border:"none", borderRadius:7, fontSize:"0.72rem", fontWeight:700, cursor:"pointer", background: h ? hoverBg : bg, color, whiteSpace:"nowrap", transition:"background 0.15s" }}>
+      {label}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MANAGER PAGE
+// ─────────────────────────────────────────────
+function ManagerPage({ products, onAdd, onDelete, isMobile, isTablet }) {
+  const [mgrFilter, setMgrFilter] = useState("all");
+  const [showForm, setShowForm]   = useState(!isMobile);
+  const [cat,   setCat]   = useState("pizza");
+  const [name,  setName]  = useState("");
+  const [price, setPrice] = useState("");
+  const [emoji, setEmoji] = useState("");
+  const [note,  setNote]  = useState("");
+  const [mgrToppings, setMgrToppings] = useState([]);
+  const [saving, setSaving]   = useState(false);
+  const [saved,  setSaved]    = useState(false);
+
+  const toggleMgrTopping = (id) => setMgrToppings(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
+
+  const handleSave = async () => {
+    if (!name.trim()) { alert("Please enter a product name."); return; }
+    const p = parseFloat(price);
+    if (isNaN(p) || p <= 0) { alert("Please enter a valid price."); return; }
+    const defEmoji = { pizza:"🍕", salad:"🥗", grinder:"🥪", side:"🍟", soda:"🥤" }[cat];
+    setSaving(true);
+    const ok = await onAdd({ category:cat, name:name.trim(), emoji:emoji.trim()||defEmoji, price:p, defaultToppings: cat==="pizza" ? [...mgrToppings] : [], note:note.trim() });
+    setSaving(false);
+    if (ok) {
+      setName(""); setPrice(""); setEmoji(""); setNote(""); setMgrToppings([]);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+      if (isMobile) setShowForm(false);
+    }
+  };
+
+  const filteredProducts = mgrFilter === "all" ? products : products.filter(p => p.category === mgrFilter);
+  const sidebarWidth = isMobile ? "100%" : isTablet ? "260px" : "300px";
+
+  const formContent = (
+    <div style={{ background:"#1A0A00", color:"white", padding:isMobile ? 16 : 20, overflowY:"auto", flexShrink:0, width: isMobile ? "100%" : sidebarWidth, borderRight: isMobile ? "none" : "3px solid #E8251A", borderBottom: isMobile ? "2px solid #E8251A" : "none", flex: isMobile ? "1" : "none", minHeight:0 }}>
+      <h3 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", letterSpacing:2, marginBottom:14, color:"white" }}>➕ Add Product</h3>
+      <MgrField label="Category">
+        <select value={cat} onChange={e => setCat(e.target.value)} style={darkInput}>
+          <option value="pizza">🍕 Pizza</option>
+          <option value="salad">🥗 Salad</option>
+          <option value="grinder">🥪 Grinder</option>
+          <option value="side">🍟 Side</option>
+          <option value="soda">🥤 Soda</option>
+        </select>
+      </MgrField>
+      <MgrField label="Product Name">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Caesar Salad" style={darkInput} />
+      </MgrField>
+      <div style={{ display:"flex", gap:8 }}>
+        <MgrField label="Price ($)" style={{ flex:1 }}>
+          <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="9.99" step="0.01" min="0" style={darkInput} />
+        </MgrField>
+        <MgrField label="Emoji" style={{ flex:1 }}>
+          <input value={emoji} onChange={e => setEmoji(e.target.value)} placeholder="🍕" maxLength={2} style={darkInput} />
+        </MgrField>
+      </div>
+      <MgrField label="Note (visible on menu)">
+        <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Gluten-free available..." style={{ ...darkInput, resize:"none", height:60 }} />
+      </MgrField>
+      {cat === "pizza" && (
+        <>
+          <div style={{ fontSize:"0.7rem", textTransform:"uppercase", letterSpacing:1, color:"#B89070", fontWeight:600, margin:"10px 0 7px", paddingTop:10, borderTop:"1px solid #3D1F00" }}>Default Toppings</div>
+          <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 5 : 4 }}>
+            {ALL_TOPPINGS.map(t => {
+              const checked = mgrToppings.includes(t.id);
+              return (
+                <div key={t.id} onClick={() => toggleMgrTopping(t.id)} style={{ display:"flex", alignItems:"center", padding: isMobile ? "10px 12px" : "6px 8px", borderRadius:8, background: checked ? "#4A1E00" : "#2A1200", border: checked ? "1px solid #F97316" : "1px solid #3D1F00", cursor:"pointer", userSelect:"none", minHeight: isMobile ? 44 : 34, transition:"background 0.15s" }}>
+                  <input type="checkbox" checked={checked} readOnly style={{ accentColor:"#F97316", width: isMobile ? 16 : 13, height: isMobile ? 16 : 13, flexShrink:0, marginRight: isMobile ? 10 : 6, pointerEvents:"none" }} />
+                  <span style={{ fontSize: isMobile ? "0.88rem" : "0.72rem", color: checked ? "white" : "#D4B896", fontWeight: checked ? 600 : 400 }}>{t.label}</span>
+                  {checked && <span style={{ marginLeft:"auto", fontSize:"0.65rem", color:"#F97316", fontWeight:700 }}>✓</span>}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <button onClick={handleSave} disabled={saving} style={{ width:"100%", padding:12, background: saved ? "#16A34A" : saving ? "#5A3A1A" : "#F97316", color:"white", border:"none", borderRadius:10, fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.1rem", letterSpacing:2, cursor: saving ? "not-allowed" : "pointer", marginTop:12, transition:"background 0.3s" }}>
+        {saving ? "Saving..." : saved ? "✓ Product Added!" : "➕ Add Product"}
+      </button>
+    </div>
+  );
+
+  return (
+    <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection: isMobile ? "column" : "row" }}>
+      {isMobile ? (
+        <>
+          <div style={{ padding:"10px 14px", background:"white", borderBottom:"1px solid #E8D5C0", display:"flex", alignItems:"center", justifyContent:"space-between", flexShrink:0 }}>
+            <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.1rem", letterSpacing:2, color:"#3D1F00" }}>⚙️ Manager</span>
+            <button onClick={() => setShowForm(f => !f)} style={{ padding:"6px 14px", background:"#E8251A", color:"white", border:"none", borderRadius:20, fontSize:"0.8rem", fontWeight:600, cursor:"pointer" }}>
+              {showForm ? "📦 Products" : "➕ Add Product"}
+            </button>
+          </div>
+          {showForm ? (
+            <div style={{ flex:1, overflowY:"auto", minHeight:0 }}>{formContent}</div>
+          ) : (
+            <div style={{ flex:1, overflowY:"auto", padding:"12px 14px" }}>
+              <ProductGrid products={filteredProducts} mgrFilter={mgrFilter} setMgrFilter={setMgrFilter} onDelete={onDelete} isMobile />
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {formContent}
+          <div style={{ flex:1, padding:20, overflowY:"auto", background:"#FFF8F0" }}>
+            <ProductGrid products={filteredProducts} mgrFilter={mgrFilter} setMgrFilter={setMgrFilter} onDelete={onDelete} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProductGrid({ products, mgrFilter, setMgrFilter, onDelete, isMobile }) {
+  return (
+    <>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <h3 style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.2rem", letterSpacing:2, color:"#3D1F00" }}>📦 All Products</h3>
+      </div>
+      <div style={{ display:"flex", gap:6, marginBottom:12, flexWrap:"wrap" }}>
+        {CAT_FILTERS.map(f => (
+          <button key={f.key} onClick={() => setMgrFilter(f.key)} style={{ padding:"4px 10px", borderRadius:20, border:`1.5px solid ${mgrFilter === f.key ? "#1A0A00" : "#E8D5C0"}`, background: mgrFilter === f.key ? "#1A0A00" : "white", color: mgrFilter === f.key ? "white" : "#7A5C40", fontSize:"0.75rem", fontWeight:600, cursor:"pointer" }}>
+            {isMobile ? f.icon : `${f.icon} ${f.label}`}
+          </button>
+        ))}
+      </div>
+      {products.length === 0 ? (
+        <div style={{ textAlign:"center", padding:"40px 20px", color:"#7A5C40" }}>No products in this category yet.</div>
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill,minmax(190px,1fr))", gap:10 }}>
+          {products.map(p => {
+            const isPizza = p.category === "pizza";
+            const sub = isPizza ? (p.defaultToppings.length ? p.defaultToppings.map(t => ALL_TOPPINGS.find(x => x.id === t)?.label || "").join(", ") : "No default toppings") : "";
+            const cc = CAT_COLORS[p.category];
+            return (
+              <div key={p.id} style={{ background:"white", borderRadius:12, padding:12, boxShadow:"0 2px 8px rgba(0,0,0,0.06)", border:"1.5px solid #E8D5C0", position:"relative" }}>
+                <button onClick={() => onDelete(p.id)} style={{ position:"absolute", top:7, right:7, background:"#FEE2E2", border:"none", borderRadius:6, padding:"2px 6px", fontSize:"0.68rem", color:"#991B1B", cursor:"pointer", fontWeight:600 }}>✕</button>
+                <div style={{ display:"flex", alignItems:"flex-start", gap:8, marginBottom:7, paddingRight:30 }}>
+                  <span style={{ fontSize:"1.8rem", flexShrink:0 }}>{p.emoji}</span>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:"0.88rem", color:"#1A0A00" }}>{p.name}</div>
+                    <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:"1.05rem", color:"#E8251A" }}>${p.price.toFixed(2)}</div>
+                    <span style={{ ...cc, fontSize:"0.58rem", fontWeight:700, padding:"1px 5px", borderRadius:5, textTransform:"uppercase", letterSpacing:0.5, display:"inline-block", marginTop:3 }}>{CAT_LABEL[p.category]}</span>
+                  </div>
+                </div>
+                {sub && !isMobile && <div style={{ fontSize:"0.68rem", color:"#7A5C40", lineHeight:1.3 }}>{sub}</div>}
+                {p.note && <div style={{ fontSize:"0.68rem", color:"#D97706", marginTop:3, fontStyle:"italic" }}>ℹ {p.note}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+function MgrField({ label, children, style }) {
+  return (
+    <div style={{ marginBottom:12, ...style }}>
+      <label style={{ display:"block", fontSize:"0.68rem", color:"#B89070", marginBottom:4, textTransform:"uppercase", letterSpacing:0.5, fontWeight:600 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// OVERLAY
+// ─────────────────────────────────────────────
+function Overlay({ children, isMobile }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(26,10,0,0.85)", zIndex:200, display:"flex", alignItems: isMobile ? "flex-end" : "center", justifyContent:"center" }}>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PAY BUTTON
+// ─────────────────────────────────────────────
+function PayBtn({ icon, label, sub, bg, border, textColor, onClick }) {
+  const [h, setH] = useState(false);
+  return (
+    <button onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onClick={onClick}
+      style={{ flex:1, padding:"16px 10px", background: h ? border+"22" : bg, border:`2px solid ${border}`, borderRadius:14, cursor:"pointer", fontFamily:"'DM Sans',sans-serif", transition:"all 0.2s" }}>
+      <div style={{ fontSize:"2rem", marginBottom:5 }}>{icon}</div>
+      <div style={{ fontWeight:700, fontSize:"1rem", color:textColor }}>{label}</div>
+      <div style={{ fontSize:"0.75rem", color:border, marginTop:2 }}>{sub}</div>
+    </button>
+  );
+}
